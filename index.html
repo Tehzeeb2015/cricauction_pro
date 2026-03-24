@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CricAuction Pro</title>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"></script>
+
+  <style>
+    body{ font-family:Segoe UI; background:#0f172a; color:white; text-align:center;}
+    .screen{display:none;}
+    .active{display:block;}
+    .box{background:#1e293b; padding:20px; border-radius:15px; width:350px; margin:15px auto;}
+    input, button{padding:10px; margin:5px; border-radius:10px; width:85%; border:none; cursor:pointer;}
+    button{background:gold; font-weight:bold;}
+    .teamBtn{background:#3b82f6; color:white; width:auto; padding:8px;}
+    .danger{background:red;color:white;}
+  </style>
+</head>
+
+<body>
+
+<h1>CricAuction Pro</h1>
+
+<!-- LOGIN -->
+<div id="login" class="screen active">
+  <div class="box">
+    <h3>Enter Phone Number</h3>
+    <input id="phone" placeholder="Enter Phone Number with origin code(like: +91)">
+    <div id="recaptcha-container"></div>
+    <button onclick="sendOTP()">Send OTP</button>
+    <br>
+    <input id="otpInput" placeholder="Enter OTP">
+    <button onclick="verifyOTP()">Verify OTP</button>
+    <p id="status"></p>
+  </div>
+</div>
+
+<!-- SETUP AUCTION -->
+<div id="setup" class="screen">
+  <div class="box">
+    <h3>Setup Auction</h3>
+    <input id="teams" placeholder="Number of Teams">
+    <input id="budget" placeholder="Budget per Team">
+    <button onclick="createTeams()">Add Teams</button>
+    <div id="teamNames"></div>
+    <hr>
+    <input id="playerNameInput" placeholder="Player Name">
+    <input id="playerPriceInput" placeholder="Base Price">
+    <button onclick="addPlayer()">Add Player</button>
+    <div id="playerList"></div>
+    <button onclick="startAuction()">Start Auction</button>
+  </div>
+</div>
+
+<!-- AUCTION -->
+<div id="auction" class="screen">
+  <h2 style="color:gold;">🏏 IPL AUCTION</h2>
+  <div class="box">
+    <h2 id="playerName"></h2>
+    <p>Base: ₹<span id="base"></span></p>
+    <p>Bid: ₹<span id="bid"></span></p>
+    <button onclick="increaseBid()">+ BID</button>
+    <div id="teamButtons"></div>
+    <button onclick="sell()">SOLD</button>
+    <button class="danger" onclick="next()">PASS</button>
+  </div>
+  <div id="budgets"></div>
+  <div id="result"></div>
+</div>
+
+<script>
+  // 🔥 FIREBASE CONFIG - REPLACE WITH YOUR OWN
+  const firebaseConfig = {
+    apiKey: "YOUR_KEY",
+    authDomain: "YOUR_DOMAIN",
+    projectId: "YOUR_PROJECT_ID",
+  };
+  const app = firebase.initializeApp(firebaseConfig);
+  const auth = firebase.auth();
+  const db = firebase.firestore();
+
+  let currentUser = null;
+  let currentUses = 0;
+
+  // OTP LOGIN
+  const recaptcha = new firebase.auth.RecaptchaVerifier('recaptcha-container');
+
+  function sendOTP(){
+    const phone = document.getElementById("phone").value;
+    auth.signInWithPhoneNumber(phone, recaptcha)
+      .then((confirmationResult) => {
+        window.confirmationResult = confirmationResult;
+        status.innerText = "OTP Sent!";
+      }).catch(console.error);
+  }
+
+  function verifyOTP(){
+    const code = otpInput.value;
+    confirmationResult.confirm(code)
+      .then((result)=>{
+        currentUser = result.user;
+        status.innerText = "Phone Verified ✅";
+
+        // CREATE USER IN FIRESTORE
+        db.collection("users").doc(currentUser.phoneNumber).get().then(doc=>{
+          if(!doc.exists){
+            db.collection("users").doc(currentUser.phoneNumber).set({
+              unlocked: true,
+              uses: 0
+            });
+            currentUses = 0;
+          } else {
+            currentUses = doc.data().uses;
+          }
+        });
+
+        login.classList.remove("active");
+        setup.classList.add("active");
+      }).catch(err=>{alert("Wrong OTP")});
+  }
+
+  // AUCTION SETUP
+  let teams=[], players=[], current=0, currentBid=0, currentBidder=null;
+
+  function createTeams(){
+    const num = document.getElementById("teams").value;
+    const div = document.getElementById("teamNames");
+    div.innerHTML = "";
+    for(let i=0;i<num;i++){
+      div.innerHTML += `<input class="teamInput" placeholder="Team ${i+1}"><br>`;
+    }
+  }
+
+  function addPlayer(){
+    const name = playerNameInput.value;
+    const price = Number(playerPriceInput.value);
+    if(!name||!price) return;
+    players.push({name,price});
+    playerList.innerHTML += `<p>${name} ₹${price}</p>`;
+  }
+
+  function startAuction(){
+    const inputs = document.querySelectorAll(".teamInput");
+    const budget = Number(document.getElementById("budget").value);
+    teams=[];
+    inputs.forEach(i=>teams.push({name:i.value, budget, players:[]} ));
+    setup.classList.remove("active");
+    auction.classList.add("active");
+    createTeamButtons();
+    updateBudgets();
+    showPlayer();
+  }
+
+  function showPlayer(){
+    if(current>=players.length){ showResult(); return; }
+    currentBid=players[current].price; currentBidder=null;
+    playerName.innerText=players[current].name;
+    base.innerText=currentBid; bid.innerText=currentBid;
+  }
+
+  function increaseBid(){ currentBid+=10; bid.innerText=currentBid; }
+  function createTeamButtons(){
+    teamButtons.innerHTML="";
+    teams.forEach((t,i)=>teamButtons.innerHTML+=
+      `<button class="teamBtn" onclick="bidPlayer(${i})">${t.name}</button>`);
+  }
+  function bidPlayer(i){ currentBidder=i; }
+  function sell(){
+    if(currentBidder==null){ alert("No bids!"); return; }
+    let team = teams[currentBidder];
+    if(team.budget<currentBid){ alert("Low budget!"); return; }
+    team.players.push(players[current].name);
+    team.budget -= currentBid;
+    updateBudgets();
+    next();
+  }
+  function next(){ current++; showPlayer(); }
+  function updateBudgets(){ budgets.innerHTML=""; teams.forEach(t=>budgets.innerHTML+=`<p>${t.name}: ₹${t.budget}</p>`);}
+  function showResult(){
+    result.innerHTML="<h2>Final Teams</h2>";
+    teams.forEach(t=>result.innerHTML+=`<p>${t.name}: ${t.players.join(", ")||"None"}</p>`);
+  }
+</script>
+
+</body>
+</html>
